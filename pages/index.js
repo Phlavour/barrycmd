@@ -6,12 +6,12 @@ const PASSWORD = 'barry12!';
 
 // ─── Theme ────────────────────────────────────────────────────
 const T = {
-  bg: "#06060a", bg2: "#0c0c12", surface: "#101018", surfaceAlt: "#14141e",
-  card: "#131320", border: "#1a1a2e", borderHi: "#252545",
-  text: "#dfe0eb", textSoft: "#8888a4", textDim: "#4a4a65",
-  cyan: "#00d4ff", cyanDim: "rgba(0,212,255,.08)",
-  green: "#22c55e", red: "#ef4444", amber: "#f59e0b",
-  purple: "#a78bfa", blue: "#60a5fa",
+  bg: "#f4f5f7", bg2: "#edeef2", surface: "#ffffff", surfaceAlt: "#f8f8fb",
+  card: "#ffffff", border: "#d8dae5", borderHi: "#c0c2d0",
+  text: "#1a1a2e", textSoft: "#5c5c7a", textDim: "#9898b0",
+  cyan: "#0099cc", cyanDim: "rgba(0,153,204,.07)",
+  green: "#16a34a", red: "#dc2626", amber: "#d97706",
+  purple: "#7c3aed", blue: "#2563eb",
 };
 
 // ─── Content tab structure (matches djangodashboard) ──────────
