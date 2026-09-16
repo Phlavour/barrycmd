@@ -1,6 +1,5 @@
-import { BARRY_VOICE, PILLARS, HOOK_TYPES, STRUCTURES } from '../../lib/barry-voice';
-
-const claude = async (prompt, max_tokens = 2000) => {
+// Server-side only — API key never exposed to browser
+const claude = async (prompt, max_tokens = 4000) => {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -15,151 +14,216 @@ const claude = async (prompt, max_tokens = 2000) => {
     }),
   });
   const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
   return data.content?.[0]?.text || '';
 };
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
-  const { action, text, pillar, feedback, count, weeklyContext, topic, notes, hook_type, structure, length } = req.body;
+
+  const { action, prompt, text, pillar, feedback, posts, context, count, weeklyContext, brandVoice, weeklyNotes, lastAnalysis, badFeedback, category, subtopics, structures, advisor } = req.body;
 
   try {
-    // ─── Score post ───────────────────────────────────────────
+    // ─── Score single post ────────────────────────────────────
     if (action === 'score') {
-      const prompt = `${BARRY_VOICE}
+      const result = await claude(`Score this Barry (@Barry_x0) post 1-10.
 
-Score this Barry post 1-10. Consider: authentic voice, no hedging, failure embedded, concrete numbers, hook quality.
+Post: "${text}"
+Category: ${pillar || 'unknown'}
 
-POST:
-${text}
+CRITERIA:
+- Zero em-dashes, separator lines, "haha", "I guess"? (violation = max 6)
+- Every claim has a concrete number?
+- Min 1 failure or limitation embedded?
+- First line creates tension, not explanation?
+- Peer-level tone, never guru?
 
-Respond ONLY with a single number 1-10. Nothing else.`;
-      const result = await claude(prompt, 10);
-      const score = parseInt(result.trim());
-      return res.json({ score: isNaN(score) ? null : Math.min(10, Math.max(1, score)) });
+9-10: exceptional · 7-8: solid · 5-6: generic · 1-4: violates rules
+
+JSON only: {"score": 7.5, "notes": "one sentence why + one fix"}`, 200);
+      const parsed = JSON.parse(result.replace(/```json|```/g, '').trim());
+      return res.json({ score: parsed.score, notes: parsed.notes });
     }
 
     // ─── Rewrite post ─────────────────────────────────────────
     if (action === 'rewrite') {
-      const prompt = `${BARRY_VOICE}
+      const result = await claude(`You are Barry (@Barry_x0). Rewrite this post based on feedback.
 
-Rewrite this Barry post based on the feedback. Keep the same pillar and topic but apply the feedback.
+ORIGINAL: "${text}"
+FEEDBACK: ${feedback}
 
-ORIGINAL POST:
-${text}
+BARRY'S RULES:
+- Zero em-dashes, separator lines, "haha", "I guess", "basically"
+- Every claim needs a concrete number
+- Min 1 failure or limitation
+- First person, direct, fragments
+- Peer-level always
 
-FEEDBACK:
-${feedback}
-
-Write ONLY the rewritten post. No preamble.`;
-      const result = await claude(prompt);
-      return res.json({ post: result.trim() });
+JSON only: {"post": "rewritten text", "structure": "Structure Name"}`, 800);
+      const parsed = JSON.parse(result.replace(/```json|```/g, '').trim());
+      return res.json(parsed);
     }
 
-    // ─── Generate from sketch ─────────────────────────────────
+    // ─── Fix post ─────────────────────────────────────────────
+    if (action === 'fix') {
+      const result = await claude(`You are Barry. Fix this post.
+
+ORIGINAL: "${text}"
+
+Remove: em-dashes, separator lines, "haha", "I guess", "basically"
+Add concrete numbers if vague. Embed 1 failure if missing.
+Keep same length. Polished version, not a rewrite.
+
+JSON only: {"post": "fixed text", "changes": "brief note"}`, 600);
+      const parsed = JSON.parse(result.replace(/```json|```/g, '').trim());
+      return res.json(parsed);
+    }
+
+    // ─── Ask Claude (explain post) ────────────────────────────
+    if (action === 'explain') {
+      const result = await claude(`You are Barry's content strategist. Analyze this post.
+
+Post: "${text}"
+Category: ${pillar || 'unknown'}
+
+Check Barry's rules: zero em-dashes, concrete numbers, min 1 failure, tension in first line, peer-level.
+Be specific. 2-4 sentences max.
+
+JSON only: {"notes": "your analysis"}`, 400);
+      const parsed = JSON.parse(result.replace(/```json|```/g, '').trim());
+      return res.json(parsed);
+    }
+
+    // ─── Define structure ─────────────────────────────────────
+    if (action === 'define_structure') {
+      const STRUCTURES = ['APAG (Attention-Problem-Advantage-Guide)', 'Single Insight', 'Story → Lesson', 'Case Study (with technical details)', 'Contrarian Take', 'Before/After', 'Question → Answer', 'List (3-5 points)', 'Framework / System', 'Shared Enemy', 'Data + Interpretation', 'Building in Public update'];
+      const result = await claude(`Analyze this Barry post and determine its structure.
+
+Post: "${text}"
+
+KNOWN STRUCTURES: ${STRUCTURES.join(', ')}
+
+If it matches, respond with EXACTLY that name.
+If not, respond with a short new name on line 1, then "NEW: description" on line 2.
+
+Respond ONLY with the structure name.`, 100);
+      return res.json({ structure: result.trim().split('\n')[0] });
+    }
+
+    // ─── Generate from Sketch ─────────────────────────────────
     if (action === 'sketch') {
-      const pillarLabel = PILLARS.find(p => p.id === pillar)?.label || pillar;
-      const prompt = `${BARRY_VOICE}
+      const bv = (brandVoice || '').slice(0, 3000);
+      const result = await claude(`You are Barry (@Barry_x0). Turn this sketch into 3 polished posts.
 
-Turn this raw sketch/idea into 3 polished Barry posts. Each should be distinct (different angle, hook, length).
+${bv ? `BRAND VOICE:\n${bv}\n` : ''}
 
-SKETCH:
-${text}
+SKETCH: "${text}"
+Category: ${pillar || 'ai'}
 
-PILLAR: ${pillarLabel}
+Rules: zero em-dashes, concrete numbers, min 1 failure, peer-level, fragments.
+Variants: one SHORT (<280 chars), one MEDIUM (280-600), one LONG (600-1500, APAG).
 
-Respond ONLY with valid JSON (no markdown):
-[
-  {"post": "...", "hook": "N", "structure": "Single Insight"},
-  {"post": "...", "hook": "H", "structure": "Story → Lesson"},
-  {"post": "...", "hook": "A", "structure": "Contrarian Take"}
-]`;
-      const result = await claude(prompt, 2000);
-      try {
-        const clean = result.replace(/```json|```/g, '').trim();
-        const variants = JSON.parse(clean);
-        return res.json({ variants });
-      } catch { return res.json({ variants: [{ post: result.trim() }] }); }
+JSON only: [{"post":"text","hook_type":"N","structure":"Single Insight","score":8}]`, 2000);
+      const variants = JSON.parse(result.replace(/```json|```/g, '').trim());
+      return res.json({ variants });
     }
 
-    // ─── Batch generate ───────────────────────────────────────
+    // ─── Score batch ──────────────────────────────────────────
+    if (action === 'score_batch') {
+      const postsText = (posts || []).map((p, i) => `${i+1}. [${p.category}] "${(p.post||'').slice(0, 200)}"`).join('\n');
+      const result = await claude(`Score these Barry posts 1-10.
+
+CRITERIA: zero em-dashes/separator lines/"haha"/"I guess" (violation=max 6), concrete numbers, min 1 failure, tension in first line, peer-level.
+
+9-10 exceptional · 7-8 solid · 5-6 generic · 1-4 violates rules
+
+POSTS:
+${postsText}
+
+JSON only, one per post: [{"score":7.5,"feedback":"one sentence why + one fix"}]`, 2000);
+      const scores = JSON.parse(result.replace(/```json|```/g, '').trim());
+      return res.json({ scores });
+    }
+
+    // ─── AI classify posts (for analytics) ────────────────────
+    if (action === 'classify') {
+      const BARRY_CATEGORIES = ['ai','on-chain','trading-psychology','eu-asia','building','tachyo','articles','monthly-summary','market-analysis','current','mindset','pnl-shares','lifestyle'];
+      const result = await claude(`Classify these Barry (@Barry_x0) posts.
+
+PILLARS: ${BARRY_CATEGORIES.join(', ')}
+
+POSTS:
+${(posts||[]).map((p,i) => `${i+1}. [${p.id}] "${(p.text||'').slice(0,120)}"`).join('\n')}
+
+JSON only: [{"id":"post_id","pillar":"pillar_name","structure":"structure_name","aiScore":7}]`, 2000);
+      const classified = JSON.parse(result.replace(/```json|```/g, '').trim());
+      return res.json({ classified });
+    }
+
+    // ─── Generate AI analysis report ──────────────────────────
+    if (action === 'report') {
+      const result = await claude(prompt, 1500);
+      return res.json({ report: result });
+    }
+
+    // ─── Generate batch of posts ──────────────────────────────
     if (action === 'batch') {
-      const n = Math.min(count || 15, 30);
-      const ctx = weeklyContext || {};
+      const bv = (brandVoice || '').slice(0, 6000);
+      const ctx = weeklyNotes || '';
+      const bad = badFeedback || '';
+      const last = (lastAnalysis || '').slice(0, 1000);
 
-      // Pillar distribution matching Barry's content strategy
-      const distribution = [
-        { pillar: 'ai',              count: Math.ceil(n * 0.25) },
-        { pillar: 'market_analysis', count: Math.ceil(n * 0.15) },
-        { pillar: 'mindset',         count: Math.ceil(n * 0.15) },
-        { pillar: 'pnl_shares',      count: Math.ceil(n * 0.12) },
-        { pillar: 'lifestyle',       count: Math.ceil(n * 0.12) },
-        { pillar: 'current',         count: Math.ceil(n * 0.10) },
-        { pillar: 'articles',        count: Math.ceil(n * 0.06) },
-        { pillar: 'monthly_summary', count: Math.ceil(n * 0.05) },
-      ];
+      const batchPrompt = `You are Barry (@Barry_x0) — crypto trader, co-founder WOK Labs, EU-Asia bridge builder.
 
-      const prompt = `${BARRY_VOICE}
+YOUR BRAND VOICE:
+${bv}
 
-Generate ${n} Barry posts for this week. Distribute across pillars:
-${distribution.map(d => `- ${d.pillar}: ${d.count} posts`).join('\n')}
+${ctx ? `═══ WEEKLY CONTEXT ═══\n${ctx}\n` : ''}
+${bad ? `═══ POSTS THAT FAILED (avoid) ═══\n${bad}\n` : ''}
+${last ? `═══ LAST ANALYSIS (apply insights) ═══\n${last}\n` : ''}
 
-WEEKLY CONTEXT:
-${ctx.hotTopics ? `Hot Topics: ${ctx.hotTopics}` : ''}
-${ctx.personal ? `Personal/Narrative: ${ctx.personal}` : ''}
-${ctx.notes ? `Notes: ${ctx.notes}` : ''}
+═══ CATEGORY: ${category} ═══
 
-Rules:
-- Mix of short (<280 chars), medium (280-600), and 2-3 teacher posts (600-1500 with > bullets)
-- Every post must embed failure or limitation — no pure win framing
-- Use different hooks (N, H, E1, A, D, L, I, E2) across posts
-- Vary structures
-- Some posts should call back to the China→Thailand relocation narrative
-- Some posts about The Wokers community
+SUBTOPICS (rotate — each post different):
+${(subtopics||[]).map((s,i) => `${i+1}. ${s}`).join('\n')}
 
-Respond ONLY with valid JSON (no markdown):
-[
-  {"post": "...", "pillar": "ai", "hook": "N", "structure": "Single Insight"},
-  ...
-]`;
+STRUCTURES (vary):
+${(structures||[]).map((s,i) => `${i+1}. ${s}`).join('\n')}
 
-      const result = await claude(prompt, 6000);
-      try {
-        const clean = result.replace(/```json|```/g, '').trim();
-        const posts = JSON.parse(clean);
-        return res.json({ posts: Array.isArray(posts) ? posts : [] });
-      } catch {
-        // Fallback: try to extract any valid array
-        const match = result.match(/\[[\s\S]*\]/);
-        if (match) {
-          try { return res.json({ posts: JSON.parse(match[0]) }); } catch {}
-        }
-        return res.json({ posts: [] });
-      }
+═══ ADVISOR ═══
+${advisor || ''}
+
+═══ TASK ═══
+Generate exactly ${count} posts for "${category}".
+
+HOOK TYPES: H=Helpful | E1=Emotion | A=Ask | D=Do/Don't | L=List | I=Inspire | N=Numbers | E2=Empathy
+First line = hook, max 15 words, tension not explanation, vary types.
+
+BARRY'S NON-NEGOTIABLE RULES:
+- Zero em-dashes "—", separator lines "---", "haha", "I guess", "basically"
+- Every claim = concrete number (42K, 80%, 30 tools, 32GB)
+- Min 1 failure or limitation per post
+- First person, direct, fragments over full sentences
+- Peer-level always — never guru positioning
+- LENGTH: ~30% short (<280, no "read more"), ~40% medium (280-600), ~30% long (600-1500, APAG)
+
+JSON only: [{"post":"text","structure":"Name","subtopic":"used","hook_type":"N","length":"short/medium/long"}]`;
+
+      const result = await claude(batchPrompt, 4000);
+      const generatedPosts = JSON.parse(result.replace(/```json|```/g, '').trim());
+      return res.json({ posts: generatedPosts });
     }
 
-    // ─── Single post generate ─────────────────────────────────
-    const pillarLabel = PILLARS.find(p => p.id === pillar)?.label || pillar;
-    const lenGuide = length === 'short' ? 'Under 280 characters. One punchy insight. No bullets.' :
-      length === 'teacher' ? '600-1500 characters. Use > bullets. Actionable steps. End with CTA.' :
-      '280-600 characters. Standard post with context.';
+    // ─── Generic prompt ───────────────────────────────────────
+    if (prompt) {
+      const result = await claude(prompt, 1000);
+      return res.json({ text: result });
+    }
 
-    const prompt = `${BARRY_VOICE}
-
-Generate a Barry post:
-- Pillar: ${pillarLabel}
-- Hook type: ${hook_type}
-- Structure: ${structure}
-- Length: ${lenGuide}
-- Topic: ${topic || 'choose relevant topic for this pillar'}
-- Notes: ${notes || 'none'}
-
-Write ONLY the post.`;
-
-    const result = await claude(prompt);
-    return res.json({ post: result.trim() });
+    return res.status(400).json({ error: 'Unknown action' });
 
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Generation failed' });
+    console.error('Generate error:', err);
+    return res.status(500).json({ error: err.message || 'Generation failed' });
   }
 }
