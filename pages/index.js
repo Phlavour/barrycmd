@@ -16,15 +16,15 @@ const DARK = {
   cyan: "#00d4ff", cyanDim: "rgba(0,212,255,.08)",
 };
 const LIGHT = {
-  bg: "#f4f5f7", bg2: "#edeef2", surface: "#ffffff", surfaceAlt: "#f8f8fb",
-  card: "#ffffff", cardHover: "#f0f0f5", border: "#d8dae5", borderHi: "#c0c2d0",
-  text: "#1a1a2e", textSoft: "#5c5c7a", textDim: "#9898b0",
-  green: "#00b85e", greenDim: "rgba(0,184,94,.07)", greenMid: "rgba(0,184,94,.16)",
-  red: "#e0334e", redDim: "rgba(224,51,78,.07)",
-  blue: "#2d72e5", blueDim: "rgba(45,114,229,.07)",
-  amber: "#d48c1a", amberDim: "rgba(212,140,26,.07)",
-  purple: "#7744dd", purpleDim: "rgba(119,68,221,.07)",
-  cyan: "#0099cc", cyanDim: "rgba(0,153,204,.07)",
+  bg: "#fafafa", bg2: "#f2f2f2", surface: "#ffffff", surfaceAlt: "#f7f7f7",
+  card: "#ffffff", cardHover: "#f9f9f9", border: "#e8e8e8", borderHi: "#d0d0d0",
+  text: "#0a0a0a", textSoft: "#4a4a4a", textDim: "#9a9a9a",
+  green: "#0a7a3e", greenDim: "rgba(10,122,62,.06)", greenMid: "rgba(10,122,62,.14)",
+  red: "#c0281e", redDim: "rgba(192,40,30,.06)",
+  blue: "#1a4fd6", blueDim: "rgba(26,79,214,.06)",
+  amber: "#a06010", amberDim: "rgba(160,96,16,.06)",
+  purple: "#6030c0", purpleDim: "rgba(96,48,192,.06)",
+  cyan: "#006fa0", cyanDim: "rgba(0,111,160,.06)",
 };
 let T = LIGHT;
 
@@ -107,7 +107,7 @@ const Btn = ({ children, color = T.green, outline, small, onClick, disabled, sty
 );
 
 const Card = ({ children, style: sx }) => (
-  <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 12, padding: 20, transition: "all .15s", boxShadow: "0 1px 3px rgba(0,0,0,.06)", ...sx }}>
+  <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 12, padding: 20, transition: "all .15s", boxShadow: "0 1px 2px rgba(0,0,0,.04)", borderColor: T.border, ...sx }}>
     {children}
   </div>
 );
@@ -148,7 +148,7 @@ function LoginScreen({ onLogin }) {
   return (
     <div style={{ minHeight: "100vh", background: T.bg, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 24 }}>
       <div style={{ textAlign: "center" }}>
-        <div style={{ fontSize: 28, fontWeight: 900, color: T.text, fontFamily: "'Satoshi', sans-serif" }}>barry</div>
+        <div style={{ fontSize: 22, fontWeight: 700, color: T.text, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "-.02em" }}>barry</div>
         <div style={{ fontSize: 11, color: T.textDim, marginTop: 4, fontFamily: "'IBM Plex Mono', monospace" }}>content dashboard</div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10, width: 260 }}>
@@ -1464,7 +1464,7 @@ export default function App() {
       <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: "'Satoshi', sans-serif" }}>
         {/* Nav — identical structure to djangodashboard */}
         <div style={{ background: T.surface, borderBottom: `1px solid ${T.border}`, padding: "0 24px", display: "flex", alignItems: "center", gap: 4, position: "sticky", top: 0, zIndex: 100, boxShadow: "0 1px 3px rgba(0,0,0,.05)" }}>
-          <div style={{ fontSize: 15, fontWeight: 900, color: T.text, marginRight: 20, padding: "16px 0", fontFamily: "'Satoshi', sans-serif", letterSpacing: "-.01em" }}>barry</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: T.text, marginRight: 24, padding: "16px 0", fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0" }}>barry</div>
           {NAV_ITEMS.map(n => (
             <button key={n.id} onClick={() => setNav(n.id)} style={{
               background: nav === n.id ? T.surfaceAlt : "transparent",
