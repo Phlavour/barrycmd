@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { BarChart, Bar, PieChart, Pie, Cell, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import Head from "next/head";
 
 // ═══════════════════════════════════════════════════════════════
@@ -44,13 +45,25 @@ const TABS_CONFIG_FN = () => ({
   IDEAS:    { color: T.cyan,    icon: "📝", label: "Ideas" },
 });
 
-const BARRY_CATEGORIES = ["ai", "on-chain", "trading-psychology", "eu-asia", "building"];
+const BARRY_CATEGORIES = [
+  "ai", "on-chain", "trading-psychology", "eu-asia", "building",
+  "tachyo", "articles", "monthly-summary", "market-analysis",
+  "current", "mindset", "pnl-shares", "lifestyle",
+];
 const CATEGORY_COLORS_FN = () => ({
-  "ai":                T.cyan,
-  "on-chain":          T.green,
+  "ai":               T.cyan,
+  "on-chain":         T.green,
   "trading-psychology":T.amber,
-  "eu-asia":           T.purple,
-  "building":          T.blue,
+  "eu-asia":          T.purple,
+  "building":         T.blue,
+  "tachyo":           "#0a7a3e",
+  "articles":         "#6030c0",
+  "monthly-summary":  "#a06010",
+  "market-analysis":  "#c0281e",
+  "current":          "#1a4fd6",
+  "mindset":          "#006fa0",
+  "pnl-shares":       "#0a7a3e",
+  "lifestyle":        "#7744dd",
 });
 
 const STRUCTURES = [
@@ -135,6 +148,107 @@ const LoadingDots = () => {
   return <span style={{ color: T.green, fontFamily: "'IBM Plex Mono', monospace" }}>loading{dots}</span>;
 };
 
+
+// ═══════════════════════════════════════════════════════════════
+// ANALYTICS HELPERS (identical to djangodashboard)
+// ═══════════════════════════════════════════════════════════════
+const PILLAR_MAP_B = () => {
+  const CC = CATEGORY_COLORS_FN();
+  const map = {};
+  BARRY_CATEGORIES.forEach(k => {
+    map[k] = { label: k.replace(/-/g," ").replace(/\b\w/g,l=>l.toUpperCase()), color: () => CC[k] || T.textSoft };
+  });
+  return map;
+};
+
+function normPillar(p) { return (p || "").toLowerCase().replace(/ /g,"-"); }
+function parseXDate(raw) {
+  if (!raw) return null;
+  // Try "Jan 1, 2025", "2025-01-01", "01/01/2025"
+  const d = new Date(raw);
+  if (!isNaN(d)) return d;
+  const m = raw.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  if (m) return new Date(`${m[3].length===2?"20"+m[3]:m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`);
+  return null;
+}
+function anum(v) { return parseInt((v||"").toString().replace(/,/g,""))||0; }
+
+function parseAnalyticsCSV(text) {
+  const lines = text.split("\n").filter(l => l.trim());
+  if (!lines.length) return [];
+  const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g,""));
+  return lines.slice(1).map(line => {
+    const vals = []; let cur = "", inQ = false;
+    for (const ch of line) {
+      if (ch==="\"" && !inQ) { inQ=true; continue; }
+      if (ch==="\"" && inQ) { inQ=false; continue; }
+      if (ch==="," && !inQ) { vals.push(cur.trim()); cur=""; continue; }
+      cur += ch;
+    }
+    vals.push(cur.trim());
+    const row = {};
+    headers.forEach((h,i) => { row[h] = vals[i] || ""; });
+    return row;
+  });
+}
+
+async function fetchMatchPosts(supa) {
+  if (!supa?.url || !supa?.key) return [];
+  try {
+    const r = await fetch(supa.url+"/rest/v1/posts?account=eq.BARRY&order=id.desc&limit=1000",
+      { headers: { apikey: supa.key, Authorization: "Bearer "+supa.key } });
+    return r.ok ? r.json() : [];
+  } catch { return []; }
+}
+
+function getWords(text) { return (text||"").toLowerCase().replace(/[^a-z0-9\s]/g,"").split(/\s+/).filter(w=>w.length>3); }
+function findMatch(postText, supaRows) {
+  const pWords = new Set(getWords(postText));
+  let best = null, bestScore = 0;
+  for (const row of supaRows) {
+    const rWords = getWords(row.post||"");
+    if (!rWords.length) continue;
+    let shared = 0; rWords.forEach(w => { if (pWords.has(w)) shared++; });
+    const score = shared / Math.max(rWords.length, pWords.size);
+    if (score > bestScore && score > 0.4) { bestScore = score; best = row; }
+  }
+  return best;
+}
+
+async function aiClassifyPosts(posts, apiKey) {
+  if (!posts.length || !apiKey) return [];
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6", max_tokens: 2000,
+        messages: [{ role: "user", content: `Classify these Barry (@Barry_x0) posts.
+
+PILLARS: ai, on-chain, trading-psychology, eu-asia, building, tachyo, articles, monthly-summary, market-analysis, current, mindset, pnl-shares, lifestyle
+
+POSTS:
+${posts.map((p,i) => `${i+1}. [${p.id}] "${(p.text||"").slice(0,120)}"`).join("\n")}
+
+Respond ONLY with JSON: [{"id":"post_id","pillar":"pillar_name","structure":"structure_name","aiScore":7}]` }],
+      }),
+    });
+    const data = await res.json();
+    const raw = (data.content?.[0]?.text || "[]").replace(/\`\`\`json|\`\`\`/g,"").trim();
+    return JSON.parse(raw);
+  } catch { return []; }
+}
+
+const AChartTip = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null;
+  return (
+    <div style={{ background: T.card, border: "1px solid "+T.border, borderRadius: 8, padding: "8px 12px", fontSize: 11 }}>
+      <div style={{ fontWeight: 600, color: T.text, marginBottom: 4 }}>{label}</div>
+      {payload.map((p,i) => <div key={i} style={{ color: p.color || T.textSoft }}>{p.name}: <strong>{typeof p.value === "number" ? p.value.toLocaleString() : p.value}</strong></div>)}
+    </div>
+  );
+};
+
 // ═══════════════════════════════════════════════════════════════
 // LOGIN
 // ═══════════════════════════════════════════════════════════════
@@ -171,6 +285,7 @@ function BarryContentPanel({ apiKey, supa, allPosts, setAllPosts, brandVoice, se
   const [newPostStructure, setNewPostStructure] = useState("");
   const [newPostHook, setNewPostHook] = useState("");
   const [showAdd, setShowAdd] = useState(false);
+  const [newAuthor, setNewAuthor] = useState("BARRY");
   const [aiLoading, setAiLoading] = useState(null);
   const [aiResults, setAiResults] = useState({});
   const [genLoading, setGenLoading] = useState(false);
@@ -300,7 +415,7 @@ function BarryContentPanel({ apiKey, supa, allPosts, setAllPosts, brandVoice, se
     const newPost = {
       id: newId, tab: targetTab, category: newPostCat, structure: newPostStructure,
       post: newPostText.trim(), notes: newPostHook ? `hook: ${newPostHook}` : "", score: "", howToFix: "", day: "",
-      source: "manual", hook_type: newPostHook || "", account: "BARRY",
+      source: "manual", hook_type: newPostHook || "", author: newAuthor || "BARRY", account: "BARRY",
       postLink: "", impressions: "", likes: "", engagements: "", bookmarks: "",
       replies: "", reposts: "", profileVisits: "", newFollows: "", urlClicks: "",
     };
@@ -986,6 +1101,21 @@ RESPOND ONLY with JSON array, one per post in order:
             <Card>
               <Heading icon="✎">New {isPost ? "Post" : "Draft"}</Heading>
               <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+                <div>
+                  <div style={{ fontSize: 10, color: T.textSoft, marginBottom: 4, textTransform: "uppercase" }}>Author</div>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    {["BARRY", "HENRYK"].map(a => (
+                      <button key={a} onClick={() => setNewAuthor(a)} style={{
+                        padding: "6px 12px", fontSize: 11, fontWeight: 700,
+                        background: newAuthor === a ? (a === "BARRY" ? T.greenDim : T.blueDim) : "transparent",
+                        border: `1px solid ${newAuthor === a ? (a === "BARRY" ? T.green : T.blue) : T.border}`,
+                        borderRadius: 6, cursor: "pointer",
+                        color: newAuthor === a ? (a === "BARRY" ? T.green : T.blue) : T.textSoft,
+                        fontFamily: "'IBM Plex Mono', monospace",
+                      }}>{a}</button>
+                    ))}
+                  </div>
+                </div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 10, color: T.textSoft, marginBottom: 4, textTransform: "uppercase" }}>Category</div>
                   <select value={newPostCat} onChange={e => setNewPostCat(e.target.value)} style={sel}>
@@ -1135,6 +1265,7 @@ RESPOND ONLY with JSON array, one per post in order:
                   )}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", flexShrink: 0 }}>
+                  {p.author && p.author !== "BARRY" && <Badge color={T.blue}>{p.author}</Badge>}
                   {p.source === "manual" && <Badge color={T.cyan}>✍ Manual</Badge>}
                   {p.category && <Badge color={catColor}>{p.category}</Badge>}
                   {p.structure && <Badge color={T.textDim}>{p.structure}</Badge>}
@@ -1420,7 +1551,7 @@ export default function App() {
           id: r.id, _supaId: r.id, tab: r.tab || "DRAFT", category: r.category || "",
           structure: r.structure || "", post: r.post || "", notes: r.notes || "",
           score: r.score || "", howToFix: r.how_to_fix || "", day: r.day || "",
-          source: r.source || "", hook_type: r.hook_type || "", account: "BARRY",
+          source: r.source || "", hook_type: r.hook_type || "", author: r.author || "BARRY", account: "BARRY",
           postLink: r.post_link || "", impressions: r.impressions || "", likes: r.likes || "",
           engagements: r.engagements || "", bookmarks: r.bookmarks || "", replies: r.replies || "",
           reposts: r.reposts || "", profileVisits: r.profile_visits || "", newFollows: r.new_follows || "",
@@ -1449,6 +1580,7 @@ export default function App() {
   const NAV_ITEMS = [
     { id: "content", icon: "𝕏", label: "Content" },
     { id: "research", icon: "🔬", label: "Research" },
+    { id: "analytics", icon: "📈", label: "Analytics" },
   ];
 
   const postCount = (allPosts || []).length;
@@ -1502,6 +1634,7 @@ export default function App() {
             />
           )}
           {nav === "research" && <ResearchPanel supa={supa} apiKey={apiKey} />}
+          {nav === "analytics" && <AnalyticsPanel supa={supa} apiKey={apiKey} setLastAnalysis={setLastAnalysis} />}
         </div>
 
         {/* Settings modal */}
@@ -1533,5 +1666,507 @@ export default function App() {
         )}
       </div>
     </>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ANALYTICS PANEL (identical logic to djangodashboard WeeklyAnalytics)
+// ═══════════════════════════════════════════════════════════════
+function AnalyticsPanel({ supa, apiKey, setLastAnalysis }) {
+  const [status, setStatus] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [report, setReport] = useState("");
+  const [repLoad, setRepLoad] = useState(false);
+  const [dailyData, setDailyData] = useState([]);
+  const [postData, setPostData] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [range, setRange] = useState("14d");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+
+  useEffect(() => {
+    if (!supa?.url || !supa?.key) { setLoaded(true); return; }
+    setLoaded(false);
+    Promise.all([
+      fetch(supa.url+"/rest/v1/analytics_daily?account=eq.BARRY&order=date.desc&limit=365",
+        { headers: { apikey: supa.key, Authorization: "Bearer "+supa.key } }).then(r=>r.ok?r.json():[]).catch(()=>[]),
+      fetch(supa.url+"/rest/v1/analytics_posts?account=eq.BARRY&order=date.desc&limit=500",
+        { headers: { apikey: supa.key, Authorization: "Bearer "+supa.key } }).then(r=>r.ok?r.json():[]).catch(()=>[]),
+    ]).then(([d, p]) => { setDailyData(d); setPostData(p); setLoaded(true); });
+  }, [supa?.url, supa?.key]);
+
+  const filterByRange = (items, dateField) => {
+    if (!items.length || range === "all") return items;
+    const now = new Date();
+    let from, to;
+    if (range === "custom" && customFrom) {
+      from = new Date(customFrom); to = customTo ? new Date(customTo) : now;
+    } else {
+      const days = parseInt(range) || 14; from = new Date(now); from.setDate(from.getDate() - days); to = now;
+    }
+    return items.filter(item => {
+      const dv = item[dateField]; if (!dv) return true;
+      const d = new Date(dv); if (isNaN(d)) return true;
+      return d >= from && d <= to;
+    });
+  };
+
+  const filteredDaily = filterByRange(dailyData, "date").sort((a,b) => new Date(a.date) - new Date(b.date));
+  const filteredPosts = filterByRange(postData, "date").sort((a,b) => new Date(b.date) - new Date(a.date));
+
+  const uploadContent = useCallback(async (e) => {
+    const file = e.target.files[0]; if (!file) return; e.target.value = "";
+    setBusy(true); setStatus("parsing content CSV...");
+    const text = await file.text();
+    const rows = parseAnalyticsCSV(text);
+    if (!rows.length) { setStatus("error: empty CSV"); setBusy(false); return; }
+    const originals = rows.filter(r => {
+      const t = r["Post text"]||r["Tweet text"]||"";
+      return !t.startsWith("@") && t.length > 5;
+    }).map(r => {
+      const d = parseXDate(r["Date"]||"");
+      return {
+        post_id: r["Post id"]||"", date: d ? d.toISOString().slice(0,10) : "",
+        post_text: r["Post text"]||r["Tweet text"]||"", post_link: r["Post Link"]||"",
+        impressions: anum(r["Impressions"]||r["impressions"]), likes: anum(r["Likes"]||r["likes"]),
+        engagements: anum(r["Engagements"]||r["engagements"]), bookmarks: anum(r["Bookmarks"]||r["bookmarks"]),
+        reposts: anum(r["Reposts"]||r["Retweets"]||r["reposts"]), replies: anum(r["Replies"]||r["replies"]),
+        new_follows: anum(r["New follows"]), pillar: null, structure: null, ai_score: null,
+        source: "organic", account: "BARRY",
+      };
+    });
+    let matched = 0; const unmatched = [];
+    if (supa?.url && supa?.key) {
+      setStatus("matching "+originals.length+" posts with supabase...");
+      const sp = await fetchMatchPosts(supa);
+      if (sp.length > 0) {
+        for (const o of originals) {
+          const m = findMatch(o.post_text, sp);
+          if (m) { o.pillar=normPillar(m.category); o.structure=(m.structure||"").toLowerCase(); o.ai_score=parseFloat(m.score)||null; o.source=(m.source==="manual"?"manual":"ai"); o.matched_supa_id=m.id||null; matched++; }
+          else unmatched.push(o);
+        }
+      } else originals.forEach(o => unmatched.push(o));
+    } else originals.forEach(o => unmatched.push(o));
+    if (unmatched.length > 0 && apiKey) {
+      setStatus(matched+" matched · classifying "+unmatched.length+" manually...");
+      const cls = await aiClassifyPosts(unmatched.map(u => ({id:u.post_id, text:u.post_text})), apiKey);
+      for (const cp of cls) { const o = originals.find(x=>x.post_id===cp.id); if (o) { o.pillar=normPillar(cp.pillar); o.structure=(cp.structure||"").toLowerCase(); o.ai_score=cp.aiScore||null; } }
+    }
+    if (supa?.url && supa?.key) {
+      setStatus("saving "+originals.length+" posts to supabase...");
+      for (const o of originals) {
+        try {
+          const existing = await fetch(supa.url+"/rest/v1/analytics_posts?account=eq.BARRY&post_id=eq."+encodeURIComponent(o.post_id)+"&limit=1",
+            { headers: { apikey: supa.key, Authorization: "Bearer "+supa.key } }).then(r=>r.ok?r.json():[]);
+          if (existing.length > 0) {
+            await fetch(supa.url+"/rest/v1/analytics_posts?account=eq.BARRY&post_id=eq."+encodeURIComponent(o.post_id),
+              { method: "PATCH", headers: { apikey: supa.key, Authorization: "Bearer "+supa.key, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(o) });
+          } else {
+            await fetch(supa.url+"/rest/v1/analytics_posts",
+              { method: "POST", headers: { apikey: supa.key, Authorization: "Bearer "+supa.key, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(o) });
+          }
+        } catch {}
+      }
+    }
+    setPostData(prev => {
+      const map = new Map(prev.map(p => [p.post_id, p]));
+      originals.forEach(o => map.set(o.post_id, o));
+      return [...map.values()].sort((a,b) => (b.date||"").localeCompare(a.date||""));
+    });
+    setBusy(false);
+    setStatus("✓ "+originals.length+" posts · "+matched+" matched · "+(rows.length-originals.length)+" replies filtered");
+  }, [supa, apiKey]);
+
+  const uploadOverview = useCallback(async (e) => {
+    const file = e.target.files[0]; if (!file) return; e.target.value = "";
+    setBusy(true); setStatus("parsing overview CSV...");
+    const text = await file.text();
+    const rows = parseAnalyticsCSV(text);
+    if (!rows.length) { setStatus("error: empty CSV"); setBusy(false); return; }
+    const dailyRows = rows.map(r => {
+      const d = parseXDate(r["Date"]||"");
+      return { account: "BARRY", date: d ? d.toISOString().slice(0,10) : "",
+        impressions: anum(r["Impressions"]), likes: anum(r["Likes"]), engagements: anum(r["Engagements"]),
+        bookmarks: anum(r["Bookmarks"]), new_follows: anum(r["New follows"]), unfollows: anum(r["Unfollows"]),
+        replies: anum(r["Replies"]), reposts: anum(r["Reposts"]), profile_visits: anum(r["Profile visits"]),
+      };
+    }).filter(r => r.date);
+    if (supa?.url && supa?.key) {
+      setStatus("saving "+dailyRows.length+" daily rows...");
+      for (const d of dailyRows) {
+        try {
+          const existing = await fetch(supa.url+"/rest/v1/analytics_daily?account=eq.BARRY&date=eq."+d.date+"&limit=1",
+            { headers: { apikey: supa.key, Authorization: "Bearer "+supa.key } }).then(r=>r.ok?r.json():[]);
+          if (existing.length > 0) {
+            await fetch(supa.url+"/rest/v1/analytics_daily?account=eq.BARRY&date=eq."+d.date,
+              { method: "PATCH", headers: { apikey: supa.key, Authorization: "Bearer "+supa.key, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(d) });
+          } else {
+            await fetch(supa.url+"/rest/v1/analytics_daily",
+              { method: "POST", headers: { apikey: supa.key, Authorization: "Bearer "+supa.key, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(d) });
+          }
+        } catch {}
+      }
+    }
+    setDailyData(prev => {
+      const map = new Map(prev.map(d => [d.date, d]));
+      dailyRows.forEach(d => map.set(d.date, d));
+      return [...map.values()].sort((a,b) => (b.date||"").localeCompare(a.date||""));
+    });
+    setBusy(false); setStatus("✓ overview: "+dailyRows.length+" days saved");
+  }, [supa]);
+
+  const reMatch = async () => {
+    if (!filteredPosts.length || !supa?.url) return; setBusy(true); setStatus("re-matching...");
+    const sp = await fetchMatchPosts(supa); let matched = 0;
+    const updated = filteredPosts.map(o => {
+      const m = findMatch(o.post_text, sp);
+      if (m) { matched++; return {...o, pillar:normPillar(m.category), structure:(m.structure||"").toLowerCase(), ai_score:parseFloat(m.score)||o.ai_score, source:(m.source==="manual"?"manual":"ai")}; }
+      return {...o, source: o.source || "organic"};
+    });
+    for (const u of updated) {
+      if (u.post_id) try {
+        await fetch(supa.url+"/rest/v1/analytics_posts?account=eq.BARRY&post_id=eq."+encodeURIComponent(u.post_id),
+          { method: "PATCH", headers: { apikey: supa.key, Authorization: "Bearer "+supa.key, "Content-Type": "application/json", Prefer: "return=minimal" },
+            body: JSON.stringify({ pillar: u.pillar, structure: u.structure, ai_score: u.ai_score, source: u.source }) });
+      } catch {}
+    }
+    setPostData(prev => {
+      const map = new Map(prev.map(p => [p.post_id, p]));
+      updated.forEach(u => map.set(u.post_id, u));
+      return [...map.values()].sort((a,b) => (b.date||"").localeCompare(a.date||""));
+    });
+    setStatus("✓ "+matched+" matched"); setBusy(false);
+  };
+
+  // Computed stats
+  const aiPosts = filteredPosts.filter(p=>p.source==="ai");
+  const manualPosts = filteredPosts.filter(p=>p.source==="manual");
+  const organicPosts = filteredPosts.filter(p=>p.source!=="ai"&&p.source!=="manual");
+  const totalImp = filteredDaily.reduce((s,d)=>s+(d.impressions||0),0) || filteredPosts.reduce((s,p)=>s+(p.impressions||0),0);
+  const totalEng = filteredDaily.reduce((s,d)=>s+(d.engagements||0),0) || filteredPosts.reduce((s,p)=>s+(p.engagements||0),0);
+  const totalLikes = filteredDaily.reduce((s,d)=>s+(d.likes||0),0) || filteredPosts.reduce((s,p)=>s+(p.likes||0),0);
+  const totalFollows = filteredDaily.reduce((s,d)=>s+(d.new_follows||0),0);
+  const totalUnfollows = filteredDaily.reduce((s,d)=>s+(d.unfollows||0),0);
+  const totalReplies = filteredPosts.reduce((s,p)=>s+(p.replies||0),0);
+  const totalBookmarks = filteredPosts.reduce((s,p)=>s+(p.bookmarks||0),0);
+  const totalReposts = filteredPosts.reduce((s,p)=>s+(p.reposts||0),0);
+  const engRate = totalImp>0?((totalEng/totalImp)*100).toFixed(2):"0";
+  const aiAvg = aiPosts.length?Math.round(aiPosts.reduce((s,p)=>s+(p.impressions||0),0)/aiPosts.length):0;
+  const manualAvg = manualPosts.length?Math.round(manualPosts.reduce((s,p)=>s+(p.impressions||0),0)/manualPosts.length):0;
+  const organicAvg = organicPosts.length?Math.round(organicPosts.reduce((s,p)=>s+(p.impressions||0),0)/organicPosts.length):0;
+  const PM = PILLAR_MAP_B();
+
+  // Pillar performance
+  const pillarData = {};
+  filteredPosts.filter(p=>p.pillar).forEach(p => {
+    const k = normPillar(p.pillar)||p.pillar;
+    if(!pillarData[k]) pillarData[k]={posts:0,imp:0,likes:0,eng:0,replies:0,bookmarks:0,reposts:0,topImp:0,ai:0,manual:0};
+    const d=pillarData[k]; d.posts++; d.imp+=(p.impressions||0); d.likes+=(p.likes||0); d.eng+=(p.engagements||0);
+    d.replies+=(p.replies||0); d.bookmarks+=(p.bookmarks||0); d.reposts+=(p.reposts||0);
+    d.topImp=Math.max(d.topImp,(p.impressions||0));
+    if(p.source==="ai") d.ai++; else d.manual++;
+  });
+  const pillarChart = Object.entries(pillarData).map(([k,v])=>({
+    name:PM[k]?.label||k, key:k, posts:v.posts, avgImp:Math.round(v.imp/v.posts),
+    avgLikes:+(v.likes/v.posts).toFixed(1), avgReplies:+(v.replies/v.posts).toFixed(1),
+    avgBookmarks:+(v.bookmarks/v.posts).toFixed(1), engRate:v.imp>0?+((v.eng/v.imp)*100).toFixed(1):0,
+    topImp:v.topImp, ai:v.ai, manual:v.manual,
+  })).sort((a,b)=>b.avgImp-a.avgImp);
+
+  // Day of week
+  const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const dowData = {};
+  filteredPosts.forEach(p => {
+    if (!p.date) return;
+    const d = new Date(p.date); const day = DOW[d.getDay()];
+    if(!dowData[day]) dowData[day]={posts:0,imp:0,eng:0,likes:0,replies:0,bookmarks:0};
+    const dd=dowData[day]; dd.posts++; dd.imp+=(p.impressions||0); dd.eng+=(p.engagements||0);
+    dd.likes+=(p.likes||0); dd.replies+=(p.replies||0); dd.bookmarks+=(p.bookmarks||0);
+  });
+  const dowChart = DOW.map(d => ({
+    name:d, posts:dowData[d]?.posts||0,
+    avgImp:dowData[d]?.posts?Math.round(dowData[d].imp/dowData[d].posts):0,
+    avgLikes:dowData[d]?.posts?+(dowData[d].likes/dowData[d].posts).toFixed(1):0,
+  })).filter(d=>d.posts>0);
+
+  const topPosts = [...filteredPosts].sort((a,b)=>(b.impressions||0)-(a.impressions||0));
+  const hasData = loaded && (dailyData.length > 0 || postData.length > 0);
+  const isEmpty = loaded && dailyData.length === 0 && postData.length === 0;
+  const rangeLabel = range==="custom"?(customFrom||"?")+" → "+(customTo||"now"):range==="all"?"all time":"last "+range.replace("d"," days");
+  const maxImp = Math.max(...filteredPosts.map(p=>p.impressions||0),1);
+  const scoredPosts = filteredPosts.filter(p=>p.ai_score);
+
+  const rangeStyle = (val) => ({
+    background: range===val?T.greenDim:"transparent", color: range===val?T.green:T.textSoft,
+    border: "1px solid "+(range===val?T.greenMid:T.border), borderRadius: 6, padding: "4px 10px",
+    fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace",
+  });
+
+  const genReport = async () => {
+    if (!apiKey) return; setRepLoad(true); setReport("");
+    const ps = {};
+    filteredPosts.filter(p=>p.pillar).forEach(p => {
+      const k=normPillar(p.pillar)||p.pillar;
+      if(!ps[k]) ps[k]={n:0,imp:0,eng:0,likes:0,replies:0,bookmarks:0};
+      ps[k].n++; ps[k].imp+=(p.impressions||0); ps[k].eng+=(p.engagements||0);
+      ps[k].likes+=(p.likes||0); ps[k].replies+=(p.replies||0); ps[k].bookmarks+=(p.bookmarks||0);
+    });
+    let scoringSection = "";
+    if (scoredPosts.length > 0) {
+      scoringSection = "\n\nAI SCORING ACCURACY:\n"+scoredPosts.sort((a,b)=>(b.impressions||0)-(a.impressions||0)).slice(0,10).map(p=>`- AI:${p.ai_score}/10 → ${p.impressions}imp "${(p.post_text||"").slice(0,60)}"`).join("\n");
+    }
+    const prompt = `You are Barry's (@Barry_x0) content strategist. Analyze this period.
+
+PERIOD: ${rangeLabel} (${filteredDaily.length} days, ${filteredPosts.length} original posts)
+Total: ${totalImp.toLocaleString()} imp | ${totalLikes.toLocaleString()} likes | ${totalReplies} replies | ${totalBookmarks} bookmarks | ${totalReposts} reposts | ${engRate}% eng | +${totalFollows-totalUnfollows} follows
+AI: ${aiPosts.length} posts (avg ${aiAvg} imp) | Manual: ${manualPosts.length} posts (avg ${manualAvg} imp) | Organic: ${organicPosts.length} posts (avg ${organicAvg} imp)
+
+Pillars:
+${Object.entries(ps).map(([k,v])=>k+": "+v.n+"p, avg "+Math.round(v.imp/v.n)+"imp, "+(v.likes/v.n).toFixed(1)+"♥, "+(v.replies/v.n).toFixed(1)+"💬, "+(v.bookmarks/v.n).toFixed(1)+"🔖").join("\n")}
+
+Day of week:
+${dowChart.map(d=>d.name+": "+d.posts+" posts, avg "+d.avgImp+" imp").join("\n")}
+
+Top 5 posts:
+${topPosts.slice(0,5).map((p,i)=>(i+1)+". ["+p.impressions+"imp "+p.likes+"L] "+(p.source==="ai"?"AI":"manual")+"/"+(normPillar(p.pillar)||"?")+" \""+(p.post_text||"").slice(0,100)+"\"").join("\n")}
+
+Bottom 3:
+${[...filteredPosts].sort((a,b)=>(a.impressions||0)-(b.impressions||0)).slice(0,3).map((p,i)=>(i+1)+". ["+p.impressions+"imp] "+(p.source==="ai"?"AI":"manual")+"/"+(normPillar(p.pillar)||"?")+" \""+(p.post_text||"").slice(0,80)+"\"").join("\n")}
+${scoringSection}
+
+Give a comprehensive report:
+1) TL;DR (2-3 sentences)
+2) AI vs Manual — compare performance. If AI underperforms, suggest specific improvements (better prompts, voice calibration), not abandoning AI
+3) Pillar Performance — rank by engagement, analyze likes/replies/bookmarks per pillar
+4) Best Day of Week — when to post for max reach
+5) Top 3 Winners — why they worked (hook, topic, timing, emotion)
+6) Bottom 3 — why they failed + specific fix
+7) Engagement Deep Dive — which content gets bookmarks (value), replies (conversation), reposts (virality)
+8) 5 specific Action Items for next period
+
+Direct, lowercase, Barry strategist voice. No fluff. Actionable insights only.`;
+    try {
+      const r = await fetch("https://api.anthropic.com/v1/messages", { method:"POST",
+        headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+        body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1500,messages:[{role:"user",content:prompt}]}) });
+      const data = await r.json();
+      const reportText = data.content?.map(c=>c.text||"").join("")||"no response";
+      setReport(reportText);
+      if (setLastAnalysis && reportText) {
+        setLastAnalysis(reportText);
+        try { localStorage.setItem("barry_last_analysis", reportText); } catch {}
+        if (supa) supa.upsert("settings", { key: "last_analysis_barry", value: reportText }).catch(()=>{});
+      }
+    } catch(e) { setReport("error: "+e.message); }
+    setRepLoad(false);
+  };
+
+  return (
+    <div>
+      {/* Upload + Range */}
+      <Card style={{ marginBottom: 16, padding: 14 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+          <label style={{ background: T.greenDim, color: T.green, border: "1px solid "+T.greenMid, borderRadius: 8, padding: "7px 14px", fontSize: 11, fontWeight: 600, cursor: busy?"wait":"pointer", opacity: busy?0.6:1, fontFamily: "'IBM Plex Mono', monospace" }}>
+            {busy ? "⏳ processing..." : "📄 Content CSV"}
+            <input type="file" accept=".csv" onChange={uploadContent} disabled={busy} style={{ display: "none" }} />
+          </label>
+          <label style={{ background: T.blueDim, color: T.blue, border: "1px solid "+T.blue+"40", borderRadius: 8, padding: "7px 14px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace" }}>
+            📊 Overview CSV
+            <input type="file" accept=".csv" onChange={uploadOverview} style={{ display: "none" }} />
+          </label>
+          {filteredPosts.length > 0 && supa?.url && <Btn small color={T.cyan} outline onClick={reMatch} disabled={busy}>{busy?"⏳":"🔄 Re-match"}</Btn>}
+          <div style={{ flex: 1 }} />
+          {loaded && <span style={{ fontSize: 10, color: T.textDim, fontFamily: "'IBM Plex Mono'" }}>{dailyData.length}d · {postData.length}p in db</span>}
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 10, color: T.textDim, marginRight: 4 }}>RANGE:</span>
+          {["7d","14d","30d","all"].map(v => <button key={v} onClick={()=>setRange(v)} style={rangeStyle(v)}>{v==="all"?"ALL":v}</button>)}
+          <button onClick={()=>setRange("custom")} style={rangeStyle("custom")}>CUSTOM</button>
+          {range === "custom" && <>
+            <input type="date" value={customFrom} onChange={e=>setCustomFrom(e.target.value)} style={{ background: T.card, color: T.text, border: "1px solid "+T.border, borderRadius: 6, padding: "3px 8px", fontSize: 11, fontFamily: "'IBM Plex Mono'" }} />
+            <span style={{ color: T.textDim, fontSize: 10 }}>→</span>
+            <input type="date" value={customTo} onChange={e=>setCustomTo(e.target.value)} style={{ background: T.card, color: T.text, border: "1px solid "+T.border, borderRadius: 6, padding: "3px 8px", fontSize: 11, fontFamily: "'IBM Plex Mono'" }} />
+          </>}
+          <span style={{ fontSize: 10, color: T.textSoft, marginLeft: 8 }}>{filteredDaily.length}d · {filteredPosts.length} posts</span>
+        </div>
+        {status && <div style={{ fontSize: 10, marginTop: 8, fontFamily: "'IBM Plex Mono'", color: status.startsWith("✓")?T.green:status.startsWith("error")?T.red:T.textSoft }}>{status}</div>}
+      </Card>
+
+      {!loaded && <div style={{ textAlign: "center", padding: 40 }}><LoadingDots /></div>}
+
+      {isEmpty && <div style={{ textAlign: "center", padding: 60, color: T.textDim }}>
+        <div style={{ fontSize: 36, marginBottom: 12, opacity: 0.3 }}>📈</div>
+        <div style={{ fontSize: 13 }}>upload X analytics CSVs to start</div>
+        <div style={{ fontSize: 11, marginTop: 4 }}>data persists in supabase — upload once, analyze anytime</div>
+        {!supa && <div style={{ fontSize: 11, color: T.amber, marginTop: 8 }}>⚠ connect supabase in settings to persist data</div>}
+      </div>}
+
+      {hasData && <>
+        {/* Quick Stats */}
+        <Card style={{ marginBottom: 16, padding: 14 }}>
+          <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+            {[
+              { l: "Impressions", v: totalImp.toLocaleString(), c: T.green },
+              { l: "Eng Rate", v: engRate+"%", c: T.amber },
+              { l: "Likes", v: totalLikes.toLocaleString(), c: T.blue },
+              { l: "Replies", v: totalReplies.toLocaleString(), c: T.cyan },
+              { l: "Bookmarks", v: totalBookmarks.toLocaleString(), c: T.purple },
+              { l: "Reposts", v: totalReposts.toLocaleString(), c: T.red },
+              { l: "Follows", v: "+"+(totalFollows-totalUnfollows), c: "#a78bfa" },
+              { l: "Posts", v: filteredPosts.length, c: T.text, sub: aiPosts.length+" AI · "+manualPosts.length+" manual" },
+            ].map(s => (
+              <div key={s.l}>
+                <div style={{ fontSize: 10, color: T.textSoft, textTransform: "uppercase", letterSpacing: .5 }}>{s.l}</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: s.c, fontFamily: "'IBM Plex Mono'" }}>{s.v}</div>
+                {s.sub && <div style={{ fontSize: 10, color: T.textDim }}>{s.sub}</div>}
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        {/* AI vs Manual vs Organic */}
+        {(aiPosts.length + manualPosts.length + organicPosts.length > 0) && <Card style={{ marginBottom: 16, padding: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: T.text, marginBottom: 10 }}>⚡ Post Source Breakdown</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }}>
+            {aiPosts.length > 0 && <div style={{ padding: 12, background: T.greenDim, borderRadius: 10, border: "1px solid "+T.greenMid }}>
+              <div style={{ fontSize: 10, color: T.green, fontWeight: 600, textTransform: "uppercase", marginBottom: 4 }}>AI ({aiPosts.length})</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: T.text, fontFamily: "'IBM Plex Mono'" }}>{aiAvg.toLocaleString()}</div>
+              <div style={{ fontSize: 10, color: T.textSoft }}>avg impressions</div>
+            </div>}
+            {manualPosts.length > 0 && <div style={{ padding: 12, background: T.cyanDim, borderRadius: 10, border: "1px solid "+T.cyan+"30" }}>
+              <div style={{ fontSize: 10, color: T.cyan, fontWeight: 600, textTransform: "uppercase", marginBottom: 4 }}>MANUAL ({manualPosts.length})</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: T.text, fontFamily: "'IBM Plex Mono'" }}>{manualAvg.toLocaleString()}</div>
+              <div style={{ fontSize: 10, color: T.textSoft }}>avg impressions</div>
+            </div>}
+            {organicPosts.length > 0 && <div style={{ padding: 12, background: T.amberDim, borderRadius: 10, border: "1px solid "+T.amber+"30" }}>
+              <div style={{ fontSize: 10, color: T.amber, fontWeight: 600, textTransform: "uppercase", marginBottom: 4 }}>ORGANIC ({organicPosts.length})</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: T.text, fontFamily: "'IBM Plex Mono'" }}>{organicAvg.toLocaleString()}</div>
+              <div style={{ fontSize: 10, color: T.textSoft }}>avg impressions</div>
+            </div>}
+          </div>
+        </Card>}
+
+        {/* Pillar Performance */}
+        {pillarChart.length > 0 && <>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <Card style={{ padding: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: T.textDim, letterSpacing: 1, textTransform: "uppercase", marginBottom: 10 }}>Content Distribution</div>
+              <ResponsiveContainer width="100%" height={200}>
+                <PieChart>
+                  <Pie data={pillarChart} dataKey="posts" nameKey="name" cx="50%" cy="50%" outerRadius={70} innerRadius={35} paddingAngle={2} label={({name,percent})=>name+" "+Math.round(percent*100)+"%"} labelLine={false} style={{ fontSize: 10 }}>
+                    {pillarChart.map((e,i) => <Cell key={i} fill={PM[e.key]?.color()||T.textDim} />)}
+                  </Pie>
+                  <Tooltip content={({active,payload})=>{ if(!active||!payload?.length)return null; const d=payload[0]?.payload; return <div style={{background:T.card,border:"1px solid "+T.border,borderRadius:8,padding:10,fontSize:11}}><div style={{color:PM[d?.key]?.color()||T.text,fontWeight:600}}>{d?.name}</div><div style={{color:T.textSoft}}>{d?.posts} posts</div></div>; }} />
+                </PieChart>
+              </ResponsiveContainer>
+            </Card>
+            <Card style={{ padding: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: T.textDim, letterSpacing: 1, textTransform: "uppercase", marginBottom: 10 }}>Avg Impressions per Pillar</div>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={pillarChart} layout="vertical" barSize={16}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={T.border} horizontal={false} />
+                  <XAxis type="number" tick={{ fontSize: 10, fill: T.textDim }} axisLine={false} tickLine={false} />
+                  <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: T.textSoft }} axisLine={false} width={100} />
+                  <Tooltip content={<AChartTip />} />
+                  <Bar dataKey="avgImp" radius={[0,6,6,0]} name="Avg Impressions">
+                    {pillarChart.map((e,i) => <Cell key={i} fill={PM[e.key]?.color()||T.textDim} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 16 }}>
+            {pillarChart.map(p => {
+              const c = PM[p.key]?.color()||T.text;
+              return <Card key={p.key} style={{ padding: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <Badge color={c}>{p.name}</Badge>
+                  <span style={{ fontSize: 18, fontWeight: 700, color: c, fontFamily: "'IBM Plex Mono'" }}>{p.posts}</span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, fontSize: 10 }}>
+                  <div style={{ color: T.textSoft }}>avg imp</div><div style={{ color: T.text, fontWeight: 600, textAlign: "right", fontFamily: "'IBM Plex Mono'" }}>{p.avgImp.toLocaleString()}</div>
+                  <div style={{ color: T.textSoft }}>eng %</div><div style={{ color: T.amber, fontWeight: 600, textAlign: "right", fontFamily: "'IBM Plex Mono'" }}>{p.engRate}%</div>
+                  <div style={{ color: T.textSoft }}>avg ♥</div><div style={{ color: T.blue, fontWeight: 600, textAlign: "right", fontFamily: "'IBM Plex Mono'" }}>{p.avgLikes}</div>
+                  <div style={{ color: T.textSoft }}>avg 💬</div><div style={{ color: T.cyan, fontWeight: 600, textAlign: "right", fontFamily: "'IBM Plex Mono'" }}>{p.avgReplies}</div>
+                  <div style={{ color: T.textSoft }}>avg 🔖</div><div style={{ color: T.purple, fontWeight: 600, textAlign: "right", fontFamily: "'IBM Plex Mono'" }}>{p.avgBookmarks}</div>
+                </div>
+              </Card>;
+            })}
+          </div>
+        </>}
+
+        {/* Day of Week */}
+        {dowChart.length > 0 && <Card style={{ marginBottom: 16, padding: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: T.textDim, letterSpacing: 1, textTransform: "uppercase", marginBottom: 10 }}>Performance by Day of Week</div>
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={dowChart}>
+              <CartesianGrid strokeDasharray="3 3" stroke={T.border} />
+              <XAxis dataKey="name" tick={{ fontSize: 11, fill: T.textSoft }} axisLine={false} />
+              <YAxis tick={{ fontSize: 10, fill: T.textDim }} axisLine={false} />
+              <Tooltip content={<AChartTip />} />
+              <Bar dataKey="avgImp" fill={T.blue} radius={[4,4,0,0]} name="Avg Impressions" />
+              <Bar dataKey="avgLikes" fill={T.red} radius={[4,4,0,0]} name="Avg Likes" />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>}
+
+        {/* Daily Impressions Timeline */}
+        {filteredDaily.length > 0 && <Card style={{ marginBottom: 16, padding: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: T.textDim, letterSpacing: 1, textTransform: "uppercase", marginBottom: 10 }}>Daily Impressions</div>
+          <ResponsiveContainer width="100%" height={160}>
+            <LineChart data={filteredDaily}>
+              <CartesianGrid strokeDasharray="3 3" stroke={T.border} />
+              <XAxis dataKey="date" tick={{ fontSize: 9, fill: T.textDim }} axisLine={false} tickFormatter={v=>v.slice(5)} />
+              <YAxis tick={{ fontSize: 9, fill: T.textDim }} axisLine={false} />
+              <Tooltip content={<AChartTip />} />
+              <Line type="monotone" dataKey="impressions" stroke={T.green} strokeWidth={2} dot={false} name="Impressions" />
+              <Line type="monotone" dataKey="engagements" stroke={T.amber} strokeWidth={1.5} dot={false} name="Engagements" />
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>}
+
+        {/* Top Posts */}
+        {topPosts.length > 0 && <Card style={{ marginBottom: 16, padding: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: T.textDim, letterSpacing: 1, textTransform: "uppercase", marginBottom: 10 }}>Top Posts by Impressions</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {topPosts.slice(0,10).map((p,i) => (
+              <div key={p.post_id||i} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "10px 12px", background: T.surface, borderRadius: 8, border: "1px solid "+T.border }}>
+                <div style={{ minWidth: 28, textAlign: "center" }}>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: i<3?T.green:T.textSoft, fontFamily: "'IBM Plex Mono'" }}>{i+1}</div>
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, color: T.text, lineHeight: 1.5, marginBottom: 4 }}>{(p.post_text||"").slice(0,200)}{(p.post_text||"").length>200?"...":""}</div>
+                  <div style={{ display: "flex", gap: 10, fontSize: 10, color: T.textSoft, flexWrap: "wrap" }}>
+                    {p.date && <span>{p.date.slice(0,10)}</span>}
+                    {p.pillar && <Badge color={PM[normPillar(p.pillar)]?.color()||T.textSoft}>{p.pillar}</Badge>}
+                    {p.source && <Badge color={p.source==="ai"?T.green:p.source==="manual"?T.cyan:T.amber}>{p.source}</Badge>}
+                    {p.ai_score && <span style={{ color: T.amber }}>AI: {p.ai_score}/10</span>}
+                    {p.post_link && <a href={p.post_link} target="_blank" rel="noreferrer" style={{ color: T.cyan }}>🔗</a>}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 12, flexShrink: 0, fontSize: 11, fontFamily: "'IBM Plex Mono'" }}>
+                  <div style={{ textAlign: "center" }}><div style={{ color: T.green, fontWeight: 700 }}>{(p.impressions||0).toLocaleString()}</div><div style={{ fontSize: 9, color: T.textDim }}>imp</div></div>
+                  <div style={{ textAlign: "center" }}><div style={{ color: T.red, fontWeight: 700 }}>{p.likes||0}</div><div style={{ fontSize: 9, color: T.textDim }}>♥</div></div>
+                  <div style={{ textAlign: "center" }}><div style={{ color: T.purple, fontWeight: 700 }}>{p.bookmarks||0}</div><div style={{ fontSize: 9, color: T.textDim }}>🔖</div></div>
+                  <div style={{ textAlign: "center" }}><div style={{ color: T.cyan, fontWeight: 700 }}>{p.replies||0}</div><div style={{ fontSize: 9, color: T.textDim }}>💬</div></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>}
+
+        {/* AI Report */}
+        <Card style={{ padding: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: T.text }}>🤖 AI Analysis Report</div>
+            <Btn small color={T.purple} disabled={repLoad || !apiKey} onClick={genReport}>
+              {repLoad ? "⏳ generating..." : "Generate Report"}
+            </Btn>
+          </div>
+          {!apiKey && <div style={{ fontSize: 10, color: T.amber }}>⚠ add API key in settings</div>}
+          {report && <div style={{ fontSize: 12, color: T.text, lineHeight: 1.7, whiteSpace: "pre-wrap", marginTop: 10, padding: 14, background: T.surface, borderRadius: 8 }}>{report}</div>}
+        </Card>
+      </>}
+    </div>
   );
 }
