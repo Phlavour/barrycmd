@@ -93,7 +93,10 @@ const api = {
     const r = await fetch(`/api/settings?key=${key}`); const d = await r.json(); return d.value;
   },
   async setSetting(key, value) {
-    await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key, value }) });
+    const r = await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key, value }) });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(JSON.stringify(d.error || d));
+    return d;
   },
   async getAnalytics(type) {
     const r = await fetch(`/api/analytics?type=${type}`); return r.json();
@@ -416,7 +419,7 @@ function ContentPanel({ allPosts, setAllPosts, brandVoice, setBrandVoice, weekly
   const makePostFromSketch = async (id, sketchText, category) => {
     setSketchLoading(id);
     try {
-      const d = await api.generate({ action: "sketch", text: sketchText, pillar: category, brandVoice });
+      const d = await api.generate({ action: "sketch", text: sketchText, pillar: category });
       const variants = d.variants || [];
       if (variants.length > 0) {
         let maxId = (allPosts ? Math.max(0, ...allPosts.map(p => p.id)) : 0);
@@ -435,20 +438,25 @@ function ContentPanel({ allPosts, setAllPosts, brandVoice, setBrandVoice, weekly
     setSketchLoading(null);
   };
 
-  const handleBrandVoice = files => {
-    let combined = "", loaded = 0;
-    Array.from(files).forEach(file => {
+  const handleBrandVoice = async files => {
+    const fileArr = Array.from(files);
+    if (!fileArr.length) return;
+    const texts = await Promise.all(fileArr.map(file => new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = ev => {
-        combined += `\n\n=== ${file.name} ===\n${ev.target.result}`;
-        loaded++;
-        if (loaded === files.length) {
-          setBrandVoice(combined.trim());
-          api.setSetting("brand_voice_barry", combined.trim());
-        }
-      };
+      reader.onload = ev => resolve(`=== ${file.name} ===\n${ev.target.result}`);
+      reader.onerror = reject;
       reader.readAsText(file);
-    });
+    })));
+    const combined = texts.join("\n\n").trim();
+    setBrandVoice(combined);
+    try {
+      const result = await api.setSetting("brand_voice_barry", combined);
+      console.log("Brand voice saved:", result);
+      alert(`✅ Brand voice saved (${Math.round(combined.length / 1024)}KB)`);
+    } catch (err) {
+      console.error("Brand voice save error:", err);
+      alert("❌ Save failed: " + err.message);
+    }
   };
 
   const generateWeekly = async () => {
