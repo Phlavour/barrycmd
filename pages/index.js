@@ -449,13 +449,22 @@ function ContentPanel({ allPosts, setAllPosts, brandVoice, setBrandVoice, weekly
     })));
     const combined = texts.join("\n\n").trim();
     setBrandVoice(combined);
+    // Save to localStorage (for UI persistence)
+    try { localStorage.setItem("barry_brand_voice", combined); } catch {}
+    // Save to Supabase (for server-side generation)
     try {
-      const result = await api.setSetting("brand_voice_barry", combined);
-      console.log("Brand voice saved:", result);
-      alert(`✅ Brand voice saved (${Math.round(combined.length / 1024)}KB)`);
+      const r = await fetch("/api/settings", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: "brand_voice_barry", value: combined }),
+      });
+      if (r.ok) {
+        alert(`✅ Brand voice saved (${Math.round(combined.length / 1024)}KB)`);
+      } else {
+        const t = await r.text();
+        alert(`✅ Saved locally. Server: ${t.slice(0, 100)}`);
+      }
     } catch (err) {
-      console.error("Brand voice save error:", err);
-      alert("❌ Save failed: " + err.message);
+      alert(`✅ Saved locally (${Math.round(combined.length / 1024)}KB). Server save failed.`);
     }
   };
 
@@ -1198,7 +1207,9 @@ export default function App() {
   const [auth, setAuth] = useState(false);
   const [nav, setNav] = useState("content");
   const [allPosts, setAllPosts] = useState(null);
-  const [brandVoice, setBrandVoice] = useState("");
+  const [brandVoice, setBrandVoice] = useState(() => {
+    try { return localStorage.getItem("barry_brand_voice") || ""; } catch { return ""; }
+  });
   const [weeklyNotes, setWeeklyNotes] = useState("");
   const [lastAnalysis, setLastAnalysis] = useState("");
 
